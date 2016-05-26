@@ -11,6 +11,13 @@
 class AvS_FastSimpleImport_Model_Import_Entity_Category_Product extends Mage_ImportExport_Model_Import_Entity_Abstract
 {
     /**
+     * Code of a primary attribute which identifies the entity group if import contains of multiple rows
+     *
+     * @var string
+     */
+    protected $masterAttributeCode = '_sku';
+
+    /**
      * Size of bunch - part of entities to save in one step.
      */
     const BUNCH_SIZE = 20;
@@ -287,14 +294,6 @@ class AvS_FastSimpleImport_Model_Import_Entity_Category_Product extends Mage_Imp
             }
         }
 
-        if ($this->getBehavior() == Mage_ImportExport_Model_Import::BEHAVIOR_REPLACE && count($categoryIds) > 0) {
-            $this->getConnection()->query(
-                $this->getConnection()->quoteInto(
-                    "DELETE FROM `{$this->_entityTable}` WHERE `category_id` IN (?)", $categoryIds
-                )
-            );
-        }
-
         if (count($skus) > 0) {
             /** @var Varien_Db_Statement_Pdo_Mysql $result */
             $result = $this->getConnection()->query(
@@ -305,6 +304,14 @@ class AvS_FastSimpleImport_Model_Import_Entity_Category_Product extends Mage_Imp
             while ($row = $result->fetch()) {
                 $this->_skuEntityIds[$row['sku']] = (int)$row['entity_id'];
             }
+        }
+
+        if ($this->getBehavior() == Mage_ImportExport_Model_Import::BEHAVIOR_REPLACE && count($this->_skuEntityIds) > 0) {
+            $this->getConnection()->query(
+                $this->getConnection()->quoteInto(
+                    "DELETE FROM `{$this->_entityTable}` WHERE `product_id` IN (?)", array_values($this->_skuEntityIds)
+                )
+            );
         }
     }
 
@@ -519,5 +526,63 @@ class AvS_FastSimpleImport_Model_Import_Entity_Category_Product extends Mage_Imp
         if ($indexProcess) {
             $indexProcess->changeStatus(Mage_Index_Model_Process::STATUS_REQUIRE_REINDEX);
         }
+    }
+
+    /**
+     * Validate data rows and save bunches to DB.
+     *
+     * @return Mage_ImportExport_Model_Import_Entity_Abstract
+     */
+    protected function _saveValidatedBunches()
+    {
+        $source          = $this->_getSource();
+        $productDataSize = 0;
+        $bunchRows       = array();
+        $startNewBunch   = false;
+        $nextRowBackup   = array();
+        $maxDataSize = Mage::getResourceHelper('importexport')->getMaxDataSize();
+        $bunchSize = Mage::helper('importexport')->getBunchSize();
+        $currentMasterValue = null;
+
+        $source->rewind();
+        $this->_dataSourceModel->cleanBunches();
+
+        while ($source->valid() || $bunchRows) {
+            if ($startNewBunch || !$source->valid()) {
+                $this->_dataSourceModel->saveBunch($this->getEntityTypeCode(), $this->getBehavior(), $bunchRows);
+
+                $bunchRows       = $nextRowBackup;
+                $productDataSize = strlen(serialize($bunchRows));
+                $startNewBunch   = false;
+                $nextRowBackup   = array();
+            }
+            if ($source->valid()) {
+                if ($this->_errorsCount >= $this->_errorsLimit) { // errors limit check
+                    return;
+                }
+                $rowData = $source->current();
+
+                $this->_processedRowsCount++;
+
+                if ($this->validateRow($rowData, $source->key())) { // add row to bunch for save
+                    $rowData = $this->_prepareRowForDb($rowData);
+                    $rowSize = strlen(Mage::helper('core')->jsonEncode($rowData));
+
+                    $isBunchSizeExceeded = ($bunchSize > 0 && count($bunchRows) >= $bunchSize);
+                    $isNewGroup = ($currentMasterValue != $rowData[$this->masterAttributeCode])?: false;
+
+                    if (($productDataSize + $rowSize) >= $maxDataSize || $isBunchSizeExceeded && $isNewGroup) {
+                        $startNewBunch = true;
+                        $nextRowBackup = array($source->key() => $rowData);
+                    } else {
+                        $bunchRows[$source->key()] = $rowData;
+                        $productDataSize += $rowSize;
+                    }
+                }
+                $source->next();
+                $currentMasterValue = $rowData[$this->masterAttributeCode];
+            }
+        }
+        return $this;
     }
 }

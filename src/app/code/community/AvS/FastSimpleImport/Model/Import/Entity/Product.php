@@ -979,7 +979,9 @@ class AvS_FastSimpleImport_Model_Import_Entity_Product extends AvS_FastSimpleImp
             if (self::SCOPE_STORE == $rowScope) {
                 if (self::SCOPE_WEBSITE == $attribute->getIsGlobal()) {
                     // check website defaults already set
-                    if (!isset($attributes[$attrTable][$rowSku][$attrId][$rowStore])) {
+                    if (!isset($attributes[$attrTable][$rowSku][$attrId][$rowStore])
+                        || 'multiselect' == $attribute->getFrontendInput()
+                    ) {
                         $storeIds = $this->_storeIdToWebsiteStoreIds[$rowStore];
                     }
                 } elseif (self::SCOPE_STORE == $attribute->getIsGlobal()) {
@@ -1056,6 +1058,15 @@ class AvS_FastSimpleImport_Model_Import_Entity_Product extends AvS_FastSimpleImp
                             $tableName, $where
                         );
                     }
+                }
+                
+                if (Mage_ImportExport_Model_Import::BEHAVIOR_APPEND != $this->getBehavior()) {
+                    $where = $this->_connection->quoteInto('entity_id = ?', $productId) .
+                        $this->_connection->quoteInto(' AND entity_type_id = ?', $this->_entityTypeId);
+
+                    $this->_connection->delete(
+                        $tableName, $where
+                    );
                 }
             }
 
